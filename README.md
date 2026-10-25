@@ -17,7 +17,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compose.ps1 ps
 Start-Process http://localhost:19080/dang-nhap
 ~~~
 
-Web mặc định **http://localhost:19080**, Gateway **http://localhost:19081/api/v1**. Khi đổi cổng, dùng số đã điền trong .env. Chỉ bind cổng trên loopback; không publish MySQL. Setup kiểm kê container, volume, network và thử bind cổng trước khi chạy container. Nếu tên project đã có, setup chọn hậu tố mới và thông báo; tên thực tế lưu ở .local/stack.json. Named volume là <project>_integrated_data (ví dụ restaurant-team_integrated_data). Không có container_name cố định.
+Web mặc định **http://localhost:19080**, Gateway **http://localhost:19081/api/v1**. Khi đổi cổng, dùng số đã điền trong .env. Chỉ bind cổng trên loopback; không publish MySQL. Setup kiểm kê container, volume, network và thử bind cổng trước khi chạy container. Nếu tên project đã có, setup chọn hậu tố mới và thông báo; tên thực tế lưu ở .local/stack.json. Named volume là `<project>_integrated_data` (ví dụ restaurant-team_integrated_data). Không có container_name cố định.
 
 start.ps1 tạo bí mật ngẫu nhiên tại .local/ bằng một Node helper trong Docker, build/start, chờ healthy, rồi chạy seed riêng. db-init tạo schema/user còn thiếu trên cả volume mới và cũ; mỗi service chạy migration có sổ theo dõi trước khi mở HTTP. Không phụ thuộc docker-entrypoint-initdb.d. Giữ nguyên .local/ cùng volume cho các lần sau; sao lưu cả hai nếu cần phục hồi. Không tự đổi mật khẩu DB đã có volume. Setup không thay bí mật đã tồn tại.
 
