@@ -21,7 +21,10 @@ try {
     $saved = Get-Content -LiteralPath '.local/stack.json' -Raw | ConvertFrom-Json
     if ($saved.webPort -ne $webPort -or $saved.apiPort -ne $apiPort) { throw 'Existing .local configuration: keep its ports in .env. Do not replace secrets for an existing database.' }
     foreach ($secret in @('root-password','identity-db','menu-db','payment-db','order-db','reservation-db','inventory-db','staff-db','schedule-db','service-token','login-password','jwt-private.pem','jwt-public.pem')) {
-      if (!(Test-Path -LiteralPath ('.local/' + $secret))) { throw ('Missing saved secret: ' + $secret + '. Restore your local backup; do not rotate a database password automatically.') }
+      if (!(Test-Path -LiteralPath ('.local/' + $secret))) {
+        $hasResources = @($containers | Where-Object { $_ -like ($saved.project + '-*') }).Count -or @($volumes | Where-Object { $_ -like ($saved.project + '_*') }).Count
+        if ($hasResources) { throw ('Missing saved secret: ' + $secret + '. Restore your local backup; do not rotate a database password automatically.') }
+      }
     }
     Write-Host ('Reuse own saved project: ' + $saved.project)
   } else {

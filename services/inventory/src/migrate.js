@@ -39,7 +39,8 @@ async function runMigrations() {
   const conn = await mysql.createConnection(connectionOptions({ multipleStatements: true }));
   try {
     // Serialise migrations if several replicas start at once.
-    await conn.query("SELECT GET_LOCK('inventory_migrations', 60)");
+    const [[lock]] = await conn.query("SELECT GET_LOCK('inventory_migrations', 60) AS acquired");
+    if(lock.acquired!==1)throw Error('Migration lock unavailable');
     await conn.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
       version VARCHAR(150) NOT NULL PRIMARY KEY,
       applied_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)

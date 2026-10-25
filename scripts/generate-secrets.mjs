@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import {randomBytes,generateKeyPairSync} from 'node:crypto';
+import {randomBytes,generateKeyPairSync,createPublicKey} from 'node:crypto';
 const cfg = JSON.parse(fs.readFileSync(".local/stack.json"));
 for (const key of [
   "order-db",
@@ -25,6 +25,7 @@ if (!fs.existsSync(".local/jwt-private.pem")) {
   fs.writeFileSync(".local/jwt-private.pem", k.privateKey);
   fs.writeFileSync(".local/jwt-public.pem", k.publicKey);
 }
+if (!fs.existsSync('.local/jwt-public.pem')) fs.writeFileSync('.local/jwt-public.pem',createPublicKey(fs.readFileSync('.local/jwt-private.pem')).export({type:'spki',format:'pem'}));
 if (!fs.existsSync(".local/vnpay.json"))
   fs.writeFileSync(".local/vnpay.json", JSON.stringify({ enabled: false }));
 fs.writeFileSync(
