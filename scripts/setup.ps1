@@ -13,6 +13,9 @@ try {
   if ($wanted -notmatch '^[a-z0-9][a-z0-9_-]+$') { throw 'Invalid COMPOSE_PROJECT_NAME in .env.' }
   $webPort = [int]$cfg['WEB_PORT']; $apiPort = [int]$cfg['API_PORT']
   if ($webPort -eq $apiPort -or $webPort -lt 1024 -or $apiPort -lt 1024 -or $webPort -gt 65535 -or $apiPort -gt 65535) { throw 'Choose two distinct ports between 1024 and 65535.' }
+  $projectJson = & docker compose ls --all --format json
+  if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect Compose projects.' }
+  $projects = @($projectJson | ConvertFrom-Json | ForEach-Object { $_.Name })
   $containers = @(& docker ps -a --format '{{.Names}}')
   $volumes = @(& docker volume ls --format '{{.Name}}')
   $networks = @(& docker network ls --format '{{.Name}}')
@@ -29,7 +32,7 @@ try {
     Write-Host ('Reuse own saved project: ' + $saved.project)
   } else {
     $project = $wanted; $n=2
-    while (@($containers | Where-Object { $_ -like ($project + '-*') }).Count -or @($volumes | Where-Object { $_ -like ($project + '_*') }).Count -or @($networks | Where-Object { $_ -like ($project + '_*') }).Count) {
+    while (($projects -contains $project) -or @($containers | Where-Object { $_ -like ($project + '-*') }).Count -or @($volumes | Where-Object { $_ -like ($project + '_*') }).Count -or @($networks | Where-Object { $_ -like ($project + '_*') }).Count) {
       $project=$wanted + '-' + $n; $n++
     }
     foreach ($port in @($webPort,$apiPort)) {
@@ -37,7 +40,7 @@ try {
       try { $listener.Start() } catch { throw ('Port ' + $port + ' is busy. Change WEB_PORT/API_PORT in .env and rerun. No stack has been started.') } finally { $listener.Stop() }
     }
     New-Item -ItemType Directory -Path '.local' -Force | Out-Null
-    @{containers=$containers;volumes=$volumes;networks=$networks} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath '.local/docker-baseline.json' -Encoding UTF8
+    @{projects=$projects;containers=$containers;volumes=$volumes;networks=$networks} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath '.local/docker-baseline.json' -Encoding UTF8
     @{project=$project;webPort=$webPort;apiPort=$apiPort} | ConvertTo-Json | Set-Content -LiteralPath '.local/stack.json' -Encoding ASCII
     Write-Host ('Selected isolated project: ' + $project)
   }

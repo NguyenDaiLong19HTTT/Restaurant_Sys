@@ -90,7 +90,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compose.ps1 stop
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/compose.ps1 up -d --wait
 ~~~
 
-Wrapper chỉ dùng compose.yaml và .local/compose.env trong bản clone. Không sử dụng docker compose down -v, docker volume rm hoặc prune. Không sửa Compose của dự án khác. Khi cổng bị chiếm, setup dừng trước khi tạo stack; chỉnh .env rồi chạy lại.
+Wrapper ghim project/cổng theo .local/stack.json và chỉ dùng compose.yaml, .local/compose.env trong bản clone, kể cả khi shell có biến môi trường của project khác. Không sử dụng docker compose down -v, docker volume rm hoặc prune. Không sửa Compose của dự án khác. Khi cổng bị chiếm, setup dừng trước khi tạo stack; chỉnh .env rồi chạy lại.
 
 ## Hợp đồng tích hợp và giới hạn
 

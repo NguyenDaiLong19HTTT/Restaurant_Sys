@@ -42,6 +42,8 @@ const compose = (...args) =>
     "docker",
     [
       "compose",
+      "--project-name",
+      stack.project,
       "--env-file",
       ".local/compose.env",
       "--file",

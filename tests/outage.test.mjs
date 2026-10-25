@@ -15,6 +15,8 @@ const compose = (args, fault = false) =>
     "docker",
     [
       "compose",
+      "--project-name",
+      stack.project,
       "--env-file",
       ".local/compose.env",
       "--file",
