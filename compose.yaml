@@ -650,18 +650,15 @@
         "test"
       ],
       "environment": {
-        "WEB_BASE_URL": "http://web:8080",
+        "WEB_BASE_URL": "http://127.0.0.1:8080",
         "DEMO_PASSWORD_FILE": "/run/secrets/login_password"
       },
       "secrets": [
         "login_password"
       ],
-      "networks": [
-        "frontend",
-        "backend"
-      ],
       "shm_size": "1gb",
-      "restart": "no"
+      "restart": "no",
+      "network_mode": "service:web"
     },
     "unit-tests": {
       "build": ".",
