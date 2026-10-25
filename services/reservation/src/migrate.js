@@ -40,7 +40,7 @@ async function runMigrations() {
   try {
     // Serialise migrations if several replicas start at once.
     const [[lock]] = await conn.query("SELECT GET_LOCK('reservation_migrations', 60) AS acquired");
-    if(lock.acquired!==1)throw Error('Migration lock unavailable');
+    if(Number(lock.acquired)!==1)throw Error('Migration lock unavailable');
     await conn.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
       version VARCHAR(150) NOT NULL PRIMARY KEY,
       applied_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
