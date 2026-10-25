@@ -40,6 +40,6 @@ try {
   }
   # Only after resource/port checks: a temporary Node helper generates local secrets.
   $root=(Get-Location).Path
-  & docker run --rm --mount ('type=bind,source=' + $root + ',target=/workspace') --workdir /workspace node:24-bookworm-slim node scripts/generate-secrets.mjs
+  & docker run --rm --network none --mount ('type=bind,source=' + $root + ',target=/workspace') --workdir /workspace node:24-bookworm-slim node scripts/generate-secrets.mjs
   if ($LASTEXITCODE -ne 0) { throw 'Secret/configuration generation failed.' }
 } finally { Pop-Location }
