@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "tmnCode": "",
+  "hashSecret": "",
+  "paymentUrl": "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html",
+  "queryUrl": "https://sandbox.vnpayment.vn/merchant_webapi/api/transaction",
+  "returnUrl": "",
+  "serverIp": ""
+}

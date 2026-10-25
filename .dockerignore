@@ -1,0 +1,11 @@
+node_modules
+.git
+.local
+.env
+.env.*
+test-results
+playwright-report
+coverage
+docs/integration/*.json
+docs/integration/screenshots
+*.zip

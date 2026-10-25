@@ -1,0 +1,35 @@
+{
+  "name": "restaurant-integrated",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "setup": "node scripts/setup-integrated.mjs",
+    "menu": "node services/menu/src/server.mjs",
+    "gateway": "node apps/api-gateway/server.mjs",
+    "test": "node --test tests/unit.test.mjs",
+    "test:integration": "node --test --test-concurrency=1 tests/integrated.test.mjs",
+    "test:browser": "playwright test",
+    "test:payment:unit": "node --test tests/payment.unit.test.mjs",
+    "openapi:payment": "node scripts/payment-openapi.mjs",
+    "openapi": "node scripts/openapi.mjs",
+    "test:modules": "node --test --test-concurrency=1 tests/hr-inventory.test.mjs",
+    "test:outage": "node --test tests/outage.test.mjs",
+    "test:unit": "node --test tests/unit.test.mjs tests/payment.unit.test.mjs services/reservation/test/unit/*.test.js services/inventory/test/unit/*.test.js tests/schedule-week.test.mjs",
+    "openapi:integration": "node scripts/integration-openapi.mjs"
+  },
+  "dependencies": {
+    "express": "5.1.0",
+    "express-rate-limit": "8.7.1",
+    "helmet": "8.1.0",
+    "jose": "6.1.0",
+    "mysql2": "3.24.6",
+    "jsonwebtoken": "9.0.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

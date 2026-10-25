@@ -1,0 +1,523 @@
+openapi: 3.0.3
+info:
+  title: inventory-service
+  version: 1.0.0
+  description: |
+    Nguyên liệu, kho, tồn kho và luồng điều phối giữa chi nhánh
+    (PENDING_APPROVAL → APPROVED → EXPORTED → IMPORTED | REJECTED).
+
+    - Mọi số lượng là **chuỗi thập phân** (DECIMAL(14,3)), ví dụ `"1.5"`, để không mất chính xác.
+    - Lệnh cập nhật / chuyển trạng thái yêu cầu `If-Match: "<version>"`; sai version → `409 VERSION_CONFLICT`.
+    - `Idempotency-Key` bắt buộc khi xác nhận xuất/nhập, tùy chọn khi tạo/duyệt/từ chối.
+      Gửi lại cùng key trả lại đúng phản hồi cũ kèm header `Idempotent-Replayed: true`.
+    - Quản lý chi nhánh chỉ thao tác dữ liệu chi nhánh trong token; chủ chuỗi xem toàn bộ.
+    - Mỗi yêu cầu/phiếu có `allowedActions` do server tính cho người gọi (role + chi nhánh + trạng thái);
+      UI dùng trường này để hiện nút.
+    - Lỗi chung cho mọi endpoint: `400 UNKNOWN_FIELD` (body có trường không cho phép), `400 INVALID_BODY`,
+      `400 INVALID_JSON`, `400 INVALID_ID`, `415 UNSUPPORTED_MEDIA_TYPE`, `401 UNAUTHENTICATED`,
+      `403 ROLE_FORBIDDEN`, `403 BRANCH_SCOPE_FORBIDDEN`, `409 VERSION_CONFLICT`.
+    - Token: bắt buộc `exp`; kiểm tra `iss`/`aud` khi cấu hình `JWT_ISSUER`/`JWT_AUDIENCE`.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Stock
+  - name: Transfer requests
+  - name: Slips
+
+paths:
+  /ingredients:
+    get:
+      tags: [Stock]
+      summary: Danh sách nguyên liệu (chủ chuỗi, quản lý chi nhánh)
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: Tìm theo tên hoặc mã }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Ingredient' } }
+                  meta: { $ref: '#/components/schemas/Meta' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /branches/{branchId}/stock:
+    get:
+      tags: [Stock]
+      summary: Tồn kho của chi nhánh (quản lý đúng chi nhánh hoặc chủ chuỗi)
+      parameters:
+        - $ref: '#/components/parameters/BranchId'
+        - { name: warehouseId, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Mỗi nguyên liệu xuất hiện cho mỗi kho, bằng 0 nếu chưa có tồn
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      branchId: { type: string }
+                      warehouses: { type: array, items: { $ref: '#/components/schemas/Warehouse' } }
+                      balances: { type: array, items: { $ref: '#/components/schemas/Balance' } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /branches/{branchId}/stock/movements:
+    get:
+      tags: [Stock]
+      summary: Lịch sử biến động tồn kho của chi nhánh
+      parameters:
+        - $ref: '#/components/parameters/BranchId'
+        - { name: warehouseId, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Movement' } }
+                  meta: { $ref: '#/components/schemas/Meta' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /transfer-requests:
+    get:
+      tags: [Transfer requests]
+      summary: Danh sách yêu cầu điều phối
+      description: Quản lý thấy yêu cầu mà chi nhánh mình là bên yêu cầu hoặc bên cấp; chủ chuỗi thấy toàn bộ.
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/TransferStatus' } }
+        - { name: branchId, in: query, schema: { type: string }, description: Chủ chuỗi lọc theo chi nhánh; quản lý chỉ được để trống hoặc chi nhánh mình }
+        - { name: side, in: query, schema: { type: string, enum: [requester, supplier] } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/TransferRequest' } }
+                  meta: { $ref: '#/components/schemas/Meta' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Transfer requests]
+      summary: Quản lý chi nhánh tạo yêu cầu (→ PENDING_APPROVAL)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyOptional'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, items]
+              additionalProperties: false
+              properties:
+                branchId: { type: string, description: Mặc định lấy từ token; khác chi nhánh trong token → 403 }
+                reason: { type: string, minLength: 5, maxLength: 500 }
+                items: { $ref: '#/components/schemas/ItemsInput' }
+            example:
+              reason: Chuẩn bị tiệc cuối tuần
+              items:
+                - { ingredientId: a0000000-0000-4000-8000-000000000001, quantity: '20' }
+                - { ingredientId: a0000000-0000-4000-8000-000000000002, quantity: '5', note: Ưu tiên thăn }
+      responses:
+        '201': { $ref: '#/components/responses/TransferDetail' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422':
+          description: EMPTY_ITEMS, DUPLICATE_INGREDIENT, INGREDIENT_NOT_FOUND, BRANCH_INACTIVE, IDEMPOTENCY_KEY_REUSED
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '503': { $ref: '#/components/responses/Error' }
+
+  /transfer-requests/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Transfer requests]
+      summary: Chi tiết yêu cầu kèm dòng nguyên liệu, phiếu xuất, phiếu nhập
+      responses:
+        '200': { $ref: '#/components/responses/TransferDetail' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Transfer requests]
+      summary: Sửa lý do và/hoặc thay toàn bộ danh sách (chỉ PENDING_APPROVAL, quản lý chi nhánh yêu cầu)
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, minLength: 5, maxLength: 500 }
+                items: { $ref: '#/components/schemas/ItemsInput' }
+      responses:
+        '200': { $ref: '#/components/responses/TransferDetail' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { description: VERSION_CONFLICT hoặc REQUEST_NOT_EDITABLE, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Transfer requests]
+      summary: Xóa yêu cầu (chỉ PENDING_APPROVAL, quản lý chi nhánh yêu cầu)
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '204': { description: Đã xóa }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /transfer-requests/{id}/eligible-branches:
+    get:
+      tags: [Transfer requests]
+      summary: Chủ chuỗi xem chi nhánh/kho có đủ toàn bộ nguyên liệu
+      description: Một phiếu xuất lấy từ đúng một kho, nên kho phải đủ toàn bộ danh sách thì chi nhánh mới eligible.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      requestId: { type: string }
+                      requestStatus: { $ref: '#/components/schemas/TransferStatus' }
+                      version: { type: integer }
+                      items: { type: array, items: { $ref: '#/components/schemas/Item' } }
+                      branches:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            branchId: { type: string }
+                            branchStatus: { type: string }
+                            eligible: { type: boolean }
+                            warehouses:
+                              type: array
+                              items:
+                                type: object
+                                properties:
+                                  warehouseId: { type: string }
+                                  warehouseName: { type: string }
+                                  eligible: { type: boolean }
+                                  lines: { type: array, items: { $ref: '#/components/schemas/StockLine' } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /transfer-requests/{id}/approve:
+    post:
+      tags: [Transfer requests]
+      summary: Chủ chuỗi duyệt, chọn chi nhánh + kho cấp; tạo một phiếu xuất PENDING
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKeyOptional'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [supplierBranchId, warehouseId]
+              properties:
+                supplierBranchId: { type: string }
+                warehouseId: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/TransferDetail' }
+        '409': { description: VERSION_CONFLICT, INVALID_STATE, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: SUPPLIER_SAME_AS_REQUESTER, WAREHOUSE_NOT_IN_BRANCH, WAREHOUSE_INACTIVE, SUPPLIER_NOT_ELIGIBLE (details.shortages), BRANCH_INACTIVE, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /transfer-requests/{id}/reject:
+    post:
+      tags: [Transfer requests]
+      summary: Chủ chuỗi từ chối, lý do bắt buộc
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKeyOptional'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 5, maxLength: 500 }
+      responses:
+        '200': { $ref: '#/components/responses/TransferDetail' }
+        '400': { description: REJECTION_REASON_REQUIRED, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /export-slips:
+    get:
+      tags: [Slips]
+      summary: Phiếu xuất của chi nhánh cấp (chủ chuỗi xem tất cả)
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [PENDING, CONFIRMED] } }
+        - { name: branchId, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { $ref: '#/components/responses/SlipList' }
+
+  /export-slips/{id}/confirm:
+    post:
+      tags: [Slips]
+      summary: Quản lý chi nhánh cấp xác nhận xuất — trừ tồn, tạo phiếu nhập (một transaction)
+      description: Kiểm tra lại tồn dưới khóa dòng; thiếu bất kỳ dòng nào thì không trừ gì và không đổi trạng thái.
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKeyRequired'
+      responses:
+        '200': { $ref: '#/components/responses/Slip' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { description: INSUFFICIENT_STOCK (details.shortages), SLIP_ALREADY_CONFIRMED, VERSION_CONFLICT, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /import-slips:
+    get:
+      tags: [Slips]
+      summary: Phiếu nhập của chi nhánh yêu cầu (chủ chuỗi xem tất cả)
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [PENDING, CONFIRMED] } }
+        - { name: branchId, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { $ref: '#/components/responses/SlipList' }
+
+  /import-slips/{id}/confirm:
+    post:
+      tags: [Slips]
+      summary: Quản lý chi nhánh yêu cầu xác nhận nhập — cộng tồn vào kho chọn, hoàn tất (IMPORTED)
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKeyRequired'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                warehouseId: { type: string, description: Kho nhận thuộc chi nhánh mình; bỏ trống dùng kho mặc định của phiếu }
+      responses:
+        '200': { $ref: '#/components/responses/Slip' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string } }
+    BranchId: { name: branchId, in: path, required: true, schema: { type: string } }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+    IfMatch: { name: If-Match, in: header, required: true, schema: { type: string, example: '"3"' } }
+    IdempotencyKeyOptional: { name: Idempotency-Key, in: header, schema: { type: string, maxLength: 128 } }
+    IdempotencyKeyRequired: { name: Idempotency-Key, in: header, required: true, schema: { type: string, maxLength: 128 } }
+
+  responses:
+    Error:
+      description: Lỗi theo quy ước chung
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    TransferDetail:
+      description: Yêu cầu điều phối
+      headers:
+        ETag: { schema: { type: string }, description: Version hiện tại }
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/TransferRequestDetail' }
+    Slip:
+      description: Phiếu sau khi xác nhận
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/Slip' }
+    SlipList:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { type: array, items: { $ref: '#/components/schemas/Slip' } }
+              meta: { $ref: '#/components/schemas/Meta' }
+
+  schemas:
+    Quantity: { type: string, pattern: '^-?\d+(\.\d{1,3})?$', example: '1.5' }
+    TransferStatus: { type: string, enum: [PENDING_APPROVAL, APPROVED, EXPORTED, IMPORTED, REJECTED] }
+    Meta:
+      type: object
+      properties: { page: { type: integer }, limit: { type: integer }, total: { type: integer } }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: INSUFFICIENT_STOCK }
+            message: { type: string }
+            details: { type: object }
+        requestId: { type: string }
+    Ingredient:
+      type: object
+      properties: { id: { type: string }, code: { type: string }, name: { type: string }, unit: { type: string }, description: { type: string, nullable: true } }
+    Warehouse:
+      type: object
+      properties: { id: { type: string }, branchId: { type: string }, code: { type: string }, name: { type: string }, status: { type: string, enum: [ACTIVE, INACTIVE] } }
+    Balance:
+      type: object
+      properties:
+        warehouseId: { type: string }
+        ingredientId: { type: string }
+        ingredientCode: { type: string }
+        ingredientName: { type: string }
+        unit: { type: string }
+        quantity: { $ref: '#/components/schemas/Quantity' }
+        updatedAt: { type: string, format: date-time, nullable: true }
+    Movement:
+      type: object
+      properties:
+        id: { type: string }
+        warehouseId: { type: string }
+        warehouseName: { type: string }
+        ingredientId: { type: string }
+        ingredientName: { type: string }
+        unit: { type: string }
+        quantityDelta: { $ref: '#/components/schemas/Quantity' }
+        balanceAfter: { $ref: '#/components/schemas/Quantity' }
+        sourceType: { type: string, enum: [SEED, EXPORT_SLIP, IMPORT_SLIP, ADJUSTMENT] }
+        sourceId: { type: string }
+        sourceCode: { type: string, nullable: true }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+    ItemsInput:
+      type: array
+      minItems: 1
+      maxItems: 50
+      description: Không được trùng ingredientId
+      items:
+        type: object
+        required: [ingredientId, quantity]
+        properties:
+          ingredientId: { type: string }
+          quantity: { $ref: '#/components/schemas/Quantity' }
+          note: { type: string, maxLength: 255 }
+    Item:
+      type: object
+      properties:
+        id: { type: string }
+        ingredientId: { type: string }
+        ingredientCode: { type: string }
+        ingredientName: { type: string }
+        unit: { type: string }
+        quantity: { $ref: '#/components/schemas/Quantity' }
+        note: { type: string, nullable: true }
+    StockLine:
+      type: object
+      properties:
+        ingredientId: { type: string }
+        ingredientName: { type: string }
+        unit: { type: string }
+        required: { $ref: '#/components/schemas/Quantity' }
+        available: { $ref: '#/components/schemas/Quantity' }
+        enough: { type: boolean }
+    TransferRequest:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string, example: DP-261022-7K2QF }
+        requesterBranchId: { type: string }
+        supplierBranchId: { type: string, nullable: true }
+        supplierWarehouseId: { type: string, nullable: true }
+        reason: { type: string }
+        status: { $ref: '#/components/schemas/TransferStatus' }
+        rejectionReason: { type: string, nullable: true }
+        version: { type: integer }
+        createdBy: { type: string }
+        approvedBy: { type: string, nullable: true }
+        approvedAt: { type: string, format: date-time, nullable: true }
+        rejectedBy: { type: string, nullable: true }
+        rejectedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        items: { type: array, items: { $ref: '#/components/schemas/Item' } }
+        allowedActions:
+          type: array
+          items: { type: string, enum: [EDIT, DELETE, APPROVE, REJECT] }
+    TransferRequestDetail:
+      allOf:
+        - $ref: '#/components/schemas/TransferRequest'
+        - type: object
+          properties:
+            exportSlip: { allOf: [{ $ref: '#/components/schemas/Slip' }], nullable: true }
+            importSlip: { allOf: [{ $ref: '#/components/schemas/Slip' }], nullable: true }
+            history: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
+    AuditEntry:
+      type: object
+      properties:
+        action: { type: string, enum: [CREATED, UPDATED, DELETED, APPROVED, REJECTED, EXPORT_CONFIRMED, IMPORT_CONFIRMED] }
+        entityType: { type: string, enum: [TRANSFER_REQUEST, EXPORT_SLIP, IMPORT_SLIP] }
+        fromStatus: { type: string, nullable: true }
+        toStatus: { type: string, nullable: true }
+        actorAccountId: { type: string }
+        actorRole: { type: string }
+        actorBranchId: { type: string, nullable: true }
+        details: { type: object, nullable: true }
+        createdAt: { type: string, format: date-time }
+    Slip:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string, example: PX-261022-3MZ8A }
+        requestId: { type: string }
+        requestCode: { type: string }
+        requestStatus: { $ref: '#/components/schemas/TransferStatus' }
+        requestReason: { type: string }
+        requesterBranchId: { type: string }
+        supplierBranchId: { type: string }
+        branchId: { type: string, description: Chi nhánh thực hiện phiếu (cấp với phiếu xuất, nhận với phiếu nhập) }
+        warehouseId: { type: string, nullable: true }
+        warehouseName: { type: string, nullable: true }
+        status: { type: string, enum: [PENDING, CONFIRMED] }
+        version: { type: integer }
+        confirmedBy: { type: string, nullable: true }
+        confirmedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        items: { type: array, items: { $ref: '#/components/schemas/Item' } }
+        allowedActions: { type: array, items: { type: string, enum: [CONFIRM] } }

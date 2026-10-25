@@ -1,0 +1,530 @@
+openapi: 3.0.3
+info:
+  title: reservation-service
+  version: 1.0.0
+  description: |
+    Bàn, khách đặt bàn và đơn đặt bàn (PENDING → CONFIRMED → CANCEL_PENDING → CANCELLED; PENDING → CANCELLED).
+
+    - `POST /reservations` **công khai**: khách không cần tài khoản; giới hạn tần suất theo IP (`429 TOO_MANY_REQUESTS`).
+    - Các endpoint còn lại chỉ dành cho `NHAN_VIEN_TIEP_NHAN`, đúng chi nhánh trong token
+      (`403 ROLE_FORBIDDEN` / `403 BRANCH_SCOPE_FORBIDDEN`).
+    - Ngày giờ ISO 8601 **có múi giờ** (`2026-10-25T18:00:00+07:00`); API lưu và trả UTC.
+      Thời lượng giữ bàn mặc định 120 phút (`BOOKING_DURATION_MINUTES`) → `endsAt`.
+    - Khung nhận khách: giờ bắt đầu 09:00–21:00 (giờ Việt Nam), đặt trước ít nhất 30 phút, tối đa 30 ngày, 1–20 khách.
+    - Lệnh cập nhật / chuyển trạng thái yêu cầu `If-Match: "<version>"`; sai version → `409 VERSION_CONFLICT`.
+      `Idempotency-Key` tùy chọn khi tạo và xác nhận; gửi lại cùng key trả lại phản hồi cũ kèm `Idempotent-Replayed: true`.
+    - Mỗi đơn có `allowedActions` (`CONFIRM`, `EDIT`, `CANCEL`, `RETRY_CANCEL`) do server tính; UI dùng để hiện nút.
+    - Chống đặt trùng: xác nhận / đổi bàn khóa dòng bàn (`SELECT … FOR UPDATE`) rồi kiểm tra chồng lịch
+      `[startsAt, endsAt)`; trùng → `409 TABLE_TIME_CONFLICT`, đơn giữ nguyên.
+    - Lỗi chung: `400 UNKNOWN_FIELD`, `400 INVALID_BODY`, `400 INVALID_JSON`, `400 INVALID_ID`, `415 UNSUPPORTED_MEDIA_TYPE`,
+      `401 UNAUTHENTICATED`, `403 ROLE_FORBIDDEN`, `403 BRANCH_SCOPE_FORBIDDEN`, `409 VERSION_CONFLICT`.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Public
+  - name: Reservations
+  - name: Tables
+  - name: Internal
+
+paths:
+  /reservations:
+    post:
+      tags: [Public]
+      summary: Khách gửi form đặt bàn (UC01) — công khai
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateReservation' }
+            example:
+              branchId: 11111111-1111-4111-8111-111111111111
+              customerName: Nguyễn An
+              phone: '0901234567'
+              startsAt: '2026-10-25T18:00:00+07:00'
+              partySize: 4
+              serviceType: DINE_IN
+      responses:
+        '201':
+          description: Đơn được ghi nhận ở trạng thái PENDING, chưa gán bàn
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/PublicReservation' }
+        '400':
+          description: '`INVALID_NAME`, `INVALID_PHONE`, `INVALID_PARTY_SIZE`, `INVALID_DATETIME`, `VALIDATION_ERROR`, `UNKNOWN_FIELD`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '404': { $ref: '#/components/responses/Error' }
+        '422':
+          description: |
+            `BRANCH_INACTIVE`, `BRANCH_NOT_ACCEPTING_RESERVATIONS`, `START_TOO_SOON`, `START_TOO_FAR`,
+            `OUTSIDE_OPENING_HOURS`, `PARTY_TOO_LARGE`, `NO_TABLES`
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '429': { $ref: '#/components/responses/Error' }
+        '503':
+          description: '`BRANCH_SERVICE_UNAVAILABLE`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    get:
+      tags: [Reservations]
+      summary: Danh sách đơn của chi nhánh trong token
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/ReservationStatus' } }
+        - { name: date, in: query, schema: { type: string, format: date }, description: Ngày (giờ Việt Nam) của giờ đến }
+        - { name: when, in: query, schema: { type: string, enum: [upcoming, past] } }
+        - { name: q, in: query, schema: { type: string }, description: Tìm theo mã đơn, họ tên hoặc số điện thoại }
+        - { name: branchId, in: query, schema: { type: string }, description: Nếu gửi phải trùng chi nhánh trong token }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Reservation' } }
+                  meta: { $ref: '#/components/schemas/Meta' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /reservations/{id}:
+    get:
+      tags: [Reservations]
+      summary: Chi tiết đơn kèm nhật ký thao tác (ETag = version)
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/Reservation'
+                      - type: object
+                        properties:
+                          history: { type: array, items: { $ref: '#/components/schemas/HistoryEntry' } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Reservations]
+      summary: Cập nhật đơn (UC03) — chỉ họ tên, số điện thoại, giờ đến, số khách
+      description: |
+        Đơn `PENDING` hoặc `CONFIRMED`, chưa đến giờ. Với đơn đã xác nhận, đổi giờ / số khách thì kiểm tra lại bàn:
+        giữ bàn cũ nếu còn phù hợp, ngược lại chuyển sang bàn trống nhỏ nhất đủ chỗ; không có bàn → `409 NO_TABLE_AVAILABLE`.
+      parameters: [{ $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                customerName: { type: string, minLength: 2, maxLength: 100 }
+                phone: { type: string }
+                startsAt: { type: string, format: date-time }
+                partySize: { type: integer, minimum: 1, maximum: 20 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Reservation' }
+                  meta:
+                    type: object
+                    properties:
+                      tableChanged: { type: boolean }
+                      tableChange:
+                        nullable: true
+                        type: object
+                        properties:
+                          from: { $ref: '#/components/schemas/TableRef' }
+                          to: { $ref: '#/components/schemas/TableRef' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409':
+          description: '`RESERVATION_NOT_EDITABLE`, `VERSION_CONFLICT`, `NO_TABLE_AVAILABLE`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '422':
+          description: '`NO_CHANGES`, `RESERVATION_STARTED`, `START_TOO_SOON`, `OUTSIDE_OPENING_HOURS`, `PARTY_TOO_LARGE`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /reservations/{id}/confirm:
+    post:
+      tags: [Reservations]
+      summary: Xác nhận đơn và gán một bàn (UC04) — PENDING → CONFIRMED
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tableId]
+              additionalProperties: false
+              properties:
+                tableId: { type: string }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Reservation' } } } } }
+        '409':
+          description: '`TABLE_TIME_CONFLICT` (bàn vừa được đơn khác giữ), `INVALID_STATE`, `VERSION_CONFLICT`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '422':
+          description: '`TABLE_NOT_IN_BRANCH`, `TABLE_INACTIVE`, `TABLE_TOO_SMALL`, `RESERVATION_EXPIRED`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /reservations/{id}/cancel:
+    post:
+      tags: [Reservations]
+      summary: Hủy đơn (UC02) — bắt buộc lý do, chỉ trước giờ phục vụ
+      description: |
+        `PENDING` → `CANCELLED` ngay. `CONFIRMED`: hỏi order-service; còn order đã gửi chế biến → `409 ORDER_LOCKED`, đơn giữ nguyên.
+        Nếu không: chuyển `CANCEL_PENDING`, hủy các order `DRAFT` (Idempotency-Key cố định theo đơn + order), rồi `CANCELLED`
+        và giải phóng bàn. order-service không phản hồi → `503 ORDER_SERVICE_UNAVAILABLE`, đơn ở `CANCEL_PENDING`,
+        worker tự thử lại; gọi lại endpoint này để thử ngay.
+      parameters: [{ $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              additionalProperties: false
+              properties:
+                reason: { type: string, minLength: 5, maxLength: 500 }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Reservation' } } } } }
+        '400':
+          description: '`CANCEL_REASON_REQUIRED`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: '`ORDER_LOCKED`, `RESERVATION_NOT_CANCELLABLE`, `VERSION_CONFLICT`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '422':
+          description: '`RESERVATION_STARTED`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '503':
+          description: '`ORDER_SERVICE_UNAVAILABLE`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /reservations/notifications:
+    get:
+      tags: [Reservations]
+      summary: Hộp thư thông báo (outbox) của chi nhánh — SMS cho khách và thông báo nhân viên
+      description: Bản demo dùng bộ mô phỏng; trạng thái `SIMULATED` nghĩa là đã ghi nhận, **không** gửi SMS thật.
+      parameters:
+        - { name: channel, in: query, schema: { type: string, enum: [SMS, STAFF] } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+                  meta: { $ref: '#/components/schemas/Meta' }
+
+  /branches/{branchId}/tables/availability:
+    get:
+      tags: [Tables]
+      summary: Bàn đủ chỗ của chi nhánh và tình trạng trống trong khung giờ
+      parameters:
+        - { name: branchId, in: path, required: true, schema: { type: string } }
+        - { name: startsAt, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: partySize, in: query, required: true, schema: { type: integer, minimum: 1 } }
+        - { name: durationMinutes, in: query, schema: { type: integer, minimum: 30, maximum: 360, default: 120 } }
+        - { name: excludeReservationId, in: query, schema: { type: string }, description: Bỏ qua lịch của chính đơn này (xem trước khi cập nhật) }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      startsAt: { type: string, format: date-time }
+                      endsAt: { type: string, format: date-time }
+                      partySize: { type: integer }
+                      suggestedTableId: { type: string, nullable: true }
+                      tables:
+                        type: array
+                        items:
+                          allOf:
+                            - $ref: '#/components/schemas/Table'
+                            - type: object
+                              properties:
+                                available: { type: boolean }
+                                conflicts:
+                                  type: array
+                                  items:
+                                    type: object
+                                    properties:
+                                      reservationCode: { type: string }
+                                      startsAt: { type: string, format: date-time }
+                                      endsAt: { type: string, format: date-time }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /branches/{branchId}/tables/schedule:
+    get:
+      tags: [Tables]
+      summary: Lịch bàn trong ngày — mọi bàn của chi nhánh kèm đơn đang giữ bàn, và đơn chờ xếp bàn
+      description: |
+        `current` = đơn có khung giờ chứa thời điểm hiện tại (chỉ theo giờ đặt; v1 không ghi nhận khách đã đến / đã về).
+        `next` = đơn kế tiếp sau thời điểm hiện tại. Đơn `CANCEL_PENDING` vẫn giữ bàn nên vẫn hiện.
+      parameters:
+        - { name: branchId, in: path, required: true, schema: { type: string } }
+        - { name: date, in: query, schema: { type: string, format: date }, description: Ngày theo giờ Việt Nam; mặc định hôm nay }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      date: { type: string, format: date }
+                      from: { type: string, format: date-time }
+                      to: { type: string, format: date-time }
+                      tables:
+                        type: array
+                        items:
+                          allOf:
+                            - $ref: '#/components/schemas/Table'
+                            - type: object
+                              properties:
+                                bookings: { type: array, items: { $ref: '#/components/schemas/ScheduleBooking' } }
+                                current: { allOf: [{ $ref: '#/components/schemas/ScheduleBooking' }], nullable: true }
+                                next: { allOf: [{ $ref: '#/components/schemas/ScheduleBooking' }], nullable: true }
+                      unassigned: { type: array, items: { $ref: '#/components/schemas/ScheduleBooking' } }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /internal/v1/reservations/{id}/order-context:
+    servers: [{ url: / }]
+    get:
+      tags: [Internal]
+      summary: Cho order-service — chỉ đơn CONFIRMED (header X-Service-Token)
+      security: [{ internalToken: [] }]
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      branchId: { type: string }
+                      tableId: { type: string }
+                      status: { type: string }
+                      startsAt: { type: string, format: date-time }
+                      endsAt: { type: string, format: date-time }
+                      partySize: { type: integer }
+        '404': { $ref: '#/components/responses/Error' }
+        '409':
+          description: '`INVALID_RESERVATION_STATE`'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /internal/v1/tables/{id}/order-context:
+    servers: [{ url: / }]
+    get:
+      tags: [Internal]
+      summary: Cho order-service (header X-Service-Token)
+      security: [{ internalToken: [] }]
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      branchId: { type: string }
+                      capacity: { type: integer }
+                      status: { type: string, enum: [ACTIVE, INACTIVE] }
+        '404': { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+    internalToken: { type: apiKey, in: header, name: X-Service-Token }
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string } }
+    IfMatch: { name: If-Match, in: header, required: true, schema: { type: string, example: '"2"' } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 128 } }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+  responses:
+    Error:
+      description: Lỗi theo định dạng chung
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    ReservationStatus: { type: string, enum: [PENDING, CONFIRMED, CANCEL_PENDING, CANCELLED] }
+    ServiceType:
+      type: string
+      enum: [DINE_IN, PRE_ORDER]
+      description: Hình thức ăn — DINE_IN = gọi món tại bàn, PRE_ORDER = đặt món trước khi đến
+    CreateReservation:
+      type: object
+      additionalProperties: false
+      required: [branchId, customerName, phone, startsAt, partySize, serviceType]
+      properties:
+        branchId: { type: string }
+        customerName: { type: string, minLength: 2, maxLength: 100 }
+        phone: { type: string, description: 'Di động Việt Nam; chấp nhận +84 / 84, lưu dạng 0xxxxxxxxx' }
+        startsAt: { type: string, format: date-time, description: Bắt buộc có múi giờ }
+        partySize: { type: integer, minimum: 1, maximum: 20 }
+        serviceType: { $ref: '#/components/schemas/ServiceType' }
+    PublicReservation:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string, example: DB-261025-7K2QF }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        branchId: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        partySize: { type: integer }
+        serviceType: { $ref: '#/components/schemas/ServiceType' }
+    TableRef:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+    Table:
+      type: object
+      properties:
+        id: { type: string }
+        branchId: { type: string }
+        code: { type: string }
+        name: { type: string }
+        capacity: { type: integer }
+        location: { type: string, nullable: true }
+        status: { type: string, enum: [ACTIVE, INACTIVE] }
+    ScheduleBooking:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        partySize: { type: integer }
+        customerName: { type: string }
+    Reservation:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        branchId: { type: string }
+        customer:
+          type: object
+          properties:
+            id: { type: string }
+            fullName: { type: string }
+            phone: { type: string }
+        table:
+          nullable: true
+          type: object
+          properties:
+            id: { type: string }
+            code: { type: string }
+            name: { type: string }
+            capacity: { type: integer }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        partySize: { type: integer }
+        serviceType: { $ref: '#/components/schemas/ServiceType' }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        cancelReason: { type: string, nullable: true }
+        confirmedBy: { type: string, nullable: true }
+        confirmedAt: { type: string, format: date-time, nullable: true }
+        cancelledBy: { type: string, nullable: true }
+        cancelRequestedAt: { type: string, format: date-time, nullable: true }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        allowedActions:
+          type: array
+          items: { type: string, enum: [CONFIRM, EDIT, CANCEL, RETRY_CANCEL] }
+    HistoryEntry:
+      type: object
+      properties:
+        action: { type: string, enum: [CREATED, CONFIRMED, UPDATED, CANCEL_REQUESTED, CANCELLED] }
+        fromStatus: { type: string, nullable: true }
+        toStatus: { type: string, nullable: true }
+        actorAccountId: { type: string }
+        actorRole: { type: string, description: 'Vai trò nhân sự, hoặc KHACH_HANG / SYSTEM' }
+        details: { type: object, nullable: true }
+        createdAt: { type: string, format: date-time }
+    Notification:
+      type: object
+      properties:
+        id: { type: string }
+        reservationId: { type: string }
+        reservationCode: { type: string }
+        channel: { type: string, enum: [SMS, STAFF] }
+        recipient: { type: string }
+        event: { type: string, enum: [CREATED, CONFIRMED, UPDATED, CANCELLED] }
+        content: { type: string }
+        status: { type: string, enum: [PENDING, SIMULATED, SENT, FAILED] }
+        attempts: { type: integer }
+        createdAt: { type: string, format: date-time }
+        processedAt: { type: string, format: date-time, nullable: true }
+    Meta:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object }
+        requestId: { type: string }

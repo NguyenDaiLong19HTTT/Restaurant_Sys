@@ -1,0 +1,80 @@
+openapi: 3.0.3
+info:
+  title: Restaurant Identity Service
+  version: 1.0.0
+servers:
+  - url: /api/v1
+paths:
+  /auth/login:
+    post:
+      summary: Đăng nhập bằng tài khoản nhân sự
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200': { description: Access token, refresh token và tài khoản }
+        '401': { description: Sai thông tin hoặc tài khoản chưa ACTIVE }
+  /auth/refresh:
+    post:
+      summary: Thay refresh token và cấp access token mới
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { description: Token mới; refresh token cũ bị thu hồi }
+        '401': { description: Refresh token không hợp lệ }
+  /auth/logout:
+    post:
+      summary: Thu hồi refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '204': { description: Đã đăng xuất }
+  /auth/me:
+    get:
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Tài khoản hiện tại và trạng thái }
+        '401': { description: Token hết hạn, tài khoản khóa hoặc tokenVersion cũ }
+  /auth/change-password:
+    post:
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string, format: password }
+                newPassword: { type: string, minLength: 10, maxLength: 128, format: password }
+      responses:
+        '200': { description: Đổi mật khẩu và thu hồi mọi refresh token }
+        '401': { description: Token hoặc mật khẩu hiện tại không hợp lệ }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

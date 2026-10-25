@@ -1,0 +1,22 @@
+html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
+.main-column, .content, .catalog { min-width: 0; }
+@media (max-width: 760px) {
+  .sidebar { flex-wrap: wrap; }
+  .sidebar nav { display: flex; width: 100%; order: 3; gap: 8px; }
+  .sidebar nav a { flex: 1; padding: 10px 12px; font-size: 12px; }
+  .sidebar .sidebar-footer { display: flex; margin-left: auto; padding: 0; border: 0; }
+  .sidebar .sidebar-footer .avatar, .sidebar .sidebar-footer > div { display: none; }
+  .dish-name strong { max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+  .table-scroll { overflow: hidden; }
+  .table-scroll table, .table-scroll tbody { display: block; width: 100%; white-space: normal; }
+  .table-scroll thead { display: none; }
+  .table-scroll tr { display: grid; grid-template-columns: 1fr auto; gap: 13px; padding: 17px 14px; border-top: 1px solid var(--line); }
+  .table-scroll td { display: block; border: 0; padding: 0; }
+  .table-scroll td:first-child { grid-column: 1 / -1; }
+  .table-scroll td:nth-child(2) { grid-column: 1; grid-row: 2; }
+  .table-scroll td:nth-child(3) { grid-column: 2; grid-row: 2; justify-self: end; }
+  .table-scroll td:nth-child(4) { grid-column: 1; grid-row: 3; }
+  .table-scroll td:nth-child(5) { grid-column: 2; grid-row: 3; }
+  .table-scroll .dish-name { max-width: 100%; }
+  .table-scroll .dish-name strong { white-space: nowrap; max-width: 240px; }
+}

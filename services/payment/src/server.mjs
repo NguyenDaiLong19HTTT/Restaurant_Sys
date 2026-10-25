@@ -1,0 +1,13 @@
+import {database,migrate} from './db.mjs';
+import {orderAdapter} from './orders.mjs';
+import {provider,loadConfig} from './vnpay.mjs';
+import {createPaymentApp} from './app.mjs';
+import {tableAdapter} from './tables.mjs';
+const pool=database();await migrate(pool);
+const orders=orderAdapter(pool),tables=tableAdapter(pool);
+if(orders.demo!==tables.demo)throw new Error('Configure both owner services or both development adapters');
+const {app,core}=await createPaymentApp(pool,orders,provider(loadConfig()),tables);
+const server=app.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('payment-service ready'));
+let working=false;
+const worker=setInterval(async()=>{if(working)return;working=true;try{for(let i=0;i<10;i++)if(!await core.drain())break;}catch{console.error('PAYMENT_OUTBOX_RETRY_REQUIRED');}finally{working=false;}},3000);
+for(const sig of ['SIGTERM','SIGINT'])process.on(sig,()=>{clearInterval(worker);server.close(async()=>{await pool.end();process.exit(0);});});

@@ -1,0 +1,18 @@
+
+CREATE TABLE IF NOT EXISTS employees (
+  id CHAR(36) PRIMARY KEY,
+  branch_id CHAR(36) NOT NULL,
+  position_id CHAR(36) NOT NULL,
+  full_name VARCHAR(150) NOT NULL,
+  date_of_birth DATE NOT NULL,
+  gender ENUM('MALE','FEMALE','OTHER') NOT NULL,
+  citizen_id VARCHAR(12) NOT NULL UNIQUE,
+  phone VARCHAR(15) NOT NULL UNIQUE,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  address VARCHAR(255) NOT NULL,
+  start_date DATE NOT NULL,
+  status ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (position_id) REFERENCES positions(id),
+  INDEX (branch_id)
+);

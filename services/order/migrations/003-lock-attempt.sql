@@ -1,0 +1,1 @@
+ALTER TABLE orders ADD COLUMN payment_lock_payment_id CHAR(36) NULL;

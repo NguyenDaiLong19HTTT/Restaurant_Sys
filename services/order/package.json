@@ -1,0 +1,20 @@
+{
+  "name": "restaurant-order-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Order management service for the restaurant chain",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.14.0"
+  },
+  "type": "commonjs"
+}

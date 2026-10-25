@@ -1,0 +1,1 @@
+ALTER TABLE orders ADD COLUMN payment_status ENUM('UNPAID','PAID') NOT NULL DEFAULT 'UNPAID', ADD COLUMN paid_payment_id CHAR(36) NULL UNIQUE, ADD COLUMN payment_lock_id VARCHAR(128) NULL, ADD COLUMN payment_lock_hash CHAR(64) NULL, ADD COLUMN payment_ack JSON NULL;

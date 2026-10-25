@@ -1,0 +1,736 @@
+{
+  "name": "${COMPOSE_PROJECT_NAME}",
+  "services": {
+    "mysql": {
+      "image": "mysql:8.4",
+      "environment": {
+        "MYSQL_ROOT_PASSWORD_FILE": "/run/secrets/root_password"
+      },
+      "secrets": [
+        "root_password"
+      ],
+      "volumes": [
+        "integrated_data:/var/lib/mysql"
+      ],
+      "networks": [
+        "data"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "MYSQL_PWD=\"$$(cat /run/secrets/root_password)\" mysql -h 127.0.0.1 -uroot -e \"SELECT 1\" >/dev/null 2>&1"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 45
+      },
+      "restart": "unless-stopped",
+      "command": [
+        "--log-bin-trust-function-creators=1"
+      ]
+    },
+    "db-init": {
+      "build": ".",
+      "command": [
+        "node",
+        "scripts/bootstrap-integrated.mjs"
+      ],
+      "environment": {
+        "DB_HOST": "mysql"
+      },
+      "secrets": [
+        "root_password",
+        "identity_db",
+        "menu_db",
+        "payment_db",
+        "reservation_db",
+        "inventory_db",
+        "staff_db",
+        "schedule_db",
+        "order_db"
+      ],
+      "networks": [
+        "data"
+      ],
+      "depends_on": {
+        "mysql": {
+          "condition": "service_healthy"
+        }
+      },
+      "restart": "no"
+    },
+    "identity-service": {
+      "build": ".",
+      "command": [
+        "node",
+        "scripts/run.cjs",
+        "identity"
+      ],
+      "environment": {
+        "AUTH_MODE": "identity",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "DB_NAME": "identity_db",
+        "DB_USER": "identity_app",
+        "DB_PASSWORD_FILE": "/run/secrets/identity_db",
+        "JWT_PRIVATE_KEY_FILE": "/run/secrets/jwt_private",
+        "SEED_DEMO": "true",
+        "IDENTITY_BASE_URL": "http://identity-service:3000"
+      },
+      "secrets": [
+        "identity_db",
+        "jwt_public",
+        "service_token",
+        "jwt_private",
+        "login_password"
+      ],
+      "networks": [
+        "data",
+        "backend"
+      ],
+      "depends_on": {
+        "db-init": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 30
+      },
+      "restart": "unless-stopped"
+    },
+    "menu-service": {
+      "build": ".",
+      "command": [
+        "node",
+        "services/menu/src/server.mjs"
+      ],
+      "environment": {
+        "AUTH_MODE": "identity",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "DB_NAME": "menu_db",
+        "DB_USER": "menu_app",
+        "DB_PASSWORD_FILE": "/run/secrets/menu_db",
+        "SEED_DEMO": "true"
+      },
+      "secrets": [
+        "menu_db",
+        "jwt_public",
+        "service_token"
+      ],
+      "networks": [
+        "data",
+        "backend"
+      ],
+      "depends_on": {
+        "db-init": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 30
+      },
+      "restart": "unless-stopped"
+    },
+    "payment-service": {
+      "build": ".",
+      "command": [
+        "node",
+        "services/payment/src/server.mjs"
+      ],
+      "environment": {
+        "AUTH_MODE": "identity",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "DB_NAME": "payment_db",
+        "DB_USER": "payment_app",
+        "DB_PASSWORD_FILE": "/run/secrets/payment_db",
+        "PAYMENT_DB_PASSWORD_FILE": "/run/secrets/payment_db",
+        "ORDER_ADAPTER": "http",
+        "TABLE_ADAPTER": "http",
+        "ORDER_BASE_URL": "http://order-service:3000",
+        "TABLE_BASE_URL": "http://reservation-service:3000",
+        "TABLE_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "ORDER_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "VNPAY_CONFIG_FILE": "/run/secrets/vnpay_config",
+        "SEED_VOUCHERS": "true"
+      },
+      "secrets": [
+        "payment_db",
+        "jwt_public",
+        "service_token",
+        "vnpay_config"
+      ],
+      "networks": [
+        "data",
+        "backend"
+      ],
+      "depends_on": {
+        "db-init": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 30
+      },
+      "restart": "unless-stopped"
+    },
+    "reservation-service": {
+      "build": ".",
+      "command": [
+        "node",
+        "scripts/run.cjs",
+        "reservation"
+      ],
+      "environment": {
+        "AUTH_MODE": "identity",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "DB_NAME": "reservation_db",
+        "DB_USER": "reservation_app",
+        "DB_PASSWORD_FILE": "/run/secrets/reservation_db",
+        "SEED_DEMO_DATA": "true",
+        "BRANCH_BASE_URL": "http://reservation-service:3000",
+        "ORDER_BASE_URL": "http://order-service:3000"
+      },
+      "secrets": [
+        "reservation_db",
+        "jwt_public",
+        "service_token"
+      ],
+      "networks": [
+        "data",
+        "backend"
+      ],
+      "depends_on": {
+        "db-init": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 30
+      },
+      "restart": "unless-stopped"
+    },
+    "inventory-service": {
+      "build": ".",
+      "command": [
+        "node",
+        "scripts/run.cjs",
+        "inventory"
+      ],
+      "environment": {
+        "AUTH_MODE": "identity",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "DB_NAME": "inventory_db",
+        "DB_USER": "inventory_app",
+        "DB_PASSWORD_FILE": "/run/secrets/inventory_db",
+        "SEED_DEMO_DATA": "true",
+        "BRANCH_BASE_URL": "http://reservation-service:3000",
+        "ORDER_BASE_URL": "http://order-service:3000"
+      },
+      "secrets": [
+        "inventory_db",
+        "jwt_public",
+        "service_token"
+      ],
+      "networks": [
+        "data",
+        "backend"
+      ],
+      "depends_on": {
+        "db-init": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 30
+      },
+      "restart": "unless-stopped"
+    },
+    "staff-service": {
+      "build": ".",
+      "command": [
+        "node",
+        "scripts/run.cjs",
+        "staff"
+      ],
+      "environment": {
+        "AUTH_MODE": "identity",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "DB_NAME": "staff_db",
+        "DB_USER": "staff_app",
+        "DB_PASSWORD_FILE": "/run/secrets/staff_db",
+        "MYSQL_HOST": "mysql",
+        "MYSQL_USER": "staff_app",
+        "MYSQL_PASSWORD_FILE": "/run/secrets/staff_db",
+        "IDENTITY_URL": "http://identity-service:3000",
+        "SCHEDULE_URL": "http://schedule-service:3000",
+        "STAFF_URL": "http://staff-service:3000",
+        "BRANCH_BASE_URL": "http://reservation-service:3000",
+        "INTERNAL_API_KEY_FILE": "/run/secrets/service_token",
+        "SEED_DEMO": "true"
+      },
+      "secrets": [
+        "staff_db",
+        "jwt_public",
+        "service_token"
+      ],
+      "networks": [
+        "data",
+        "backend"
+      ],
+      "depends_on": {
+        "db-init": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 30
+      },
+      "restart": "unless-stopped"
+    },
+    "schedule-service": {
+      "build": ".",
+      "command": [
+        "node",
+        "scripts/run.cjs",
+        "schedule"
+      ],
+      "environment": {
+        "AUTH_MODE": "identity",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "DB_NAME": "schedule_db",
+        "DB_USER": "schedule_app",
+        "DB_PASSWORD_FILE": "/run/secrets/schedule_db",
+        "MYSQL_HOST": "mysql",
+        "MYSQL_USER": "schedule_app",
+        "MYSQL_PASSWORD_FILE": "/run/secrets/schedule_db",
+        "IDENTITY_URL": "http://identity-service:3000",
+        "SCHEDULE_URL": "http://schedule-service:3000",
+        "STAFF_URL": "http://staff-service:3000",
+        "BRANCH_BASE_URL": "http://reservation-service:3000",
+        "INTERNAL_API_KEY_FILE": "/run/secrets/service_token"
+      },
+      "secrets": [
+        "schedule_db",
+        "jwt_public",
+        "service_token"
+      ],
+      "networks": [
+        "data",
+        "backend"
+      ],
+      "depends_on": {
+        "db-init": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 30
+      },
+      "restart": "unless-stopped"
+    },
+    "api-gateway": {
+      "build": ".",
+      "command": [
+        "node",
+        "apps/api-gateway/server.mjs"
+      ],
+      "environment": {
+        "AUTH_MODE": "identity",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "MENU_BASE_URL": "http://menu-service:3000",
+        "PAYMENT_BASE_URL": "http://payment-service:3000",
+        "IDENTITY_BASE_URL": "http://identity-service:3000"
+      },
+      "secrets": [
+        "jwt_public"
+      ],
+      "networks": [
+        "backend",
+        "frontend"
+      ],
+      "ports": [
+        "127.0.0.1:${API_PORT}:3000"
+      ],
+      "depends_on": {
+        "identity-service": {
+          "condition": "service_healthy"
+        },
+        "menu-service": {
+          "condition": "service_healthy"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 30
+      },
+      "restart": "unless-stopped"
+    },
+    "web": {
+      "build": "./apps/web",
+      "networks": [
+        "frontend"
+      ],
+      "ports": [
+        "127.0.0.1:${WEB_PORT}:8080"
+      ],
+      "depends_on": {
+        "api-gateway": {
+          "condition": "service_healthy"
+        }
+      },
+      "restart": "unless-stopped"
+    },
+    "order-service": {
+      "build": ".",
+      "command": [
+        "node",
+        "scripts/run.cjs",
+        "order"
+      ],
+      "environment": {
+        "AUTH_MODE": "identity",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "DB_NAME": "order_db",
+        "DB_USER": "order_app",
+        "DB_PASSWORD_FILE": "/run/secrets/order_db",
+        "SEED_DEMO": "true",
+        "RESERVATION_BASE_URL": "http://reservation-service:3000",
+        "MENU_BASE_URL": "http://menu-service:3000",
+        "PAYMENT_BASE_URL": "http://payment-service:3000"
+      },
+      "secrets": [
+        "order_db",
+        "jwt_public",
+        "service_token"
+      ],
+      "networks": [
+        "data",
+        "backend"
+      ],
+      "depends_on": {
+        "db-init": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ],
+        "interval": "5s",
+        "timeout": "4s",
+        "retries": 30
+      },
+      "restart": "unless-stopped"
+    },
+    "table-fault-proxy": {
+      "build": ".",
+      "profiles": [
+        "test"
+      ],
+      "command": [
+        "node",
+        "tests/table-fault-proxy.mjs"
+      ],
+      "secrets": [
+        "service_token"
+      ],
+      "networks": [
+        "backend"
+      ],
+      "restart": "no"
+    },
+    "payment-tests": {
+      "build": ".",
+      "profiles": [
+        "test"
+      ],
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "tests/payment.unit.test.mjs",
+        "tests/payment.integration.test.mjs"
+      ],
+      "environment": {
+        "AUTH_MODE": "development",
+        "NODE_ENV": "development",
+        "JWT_PUBLIC_KEY_FILE": "/run/secrets/jwt_public",
+        "JWT_ISSUER": "restaurant-integrated",
+        "JWT_AUDIENCE": "restaurant-api",
+        "IDENTITY_INTROSPECTION_URL": "http://identity-service:3000/api/v1/auth/me",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "PORT": 3000,
+        "DB_HOST": "mysql",
+        "DB_NAME": "payment_db",
+        "DB_USER": "payment_app",
+        "DB_PASSWORD_FILE": "/run/secrets/payment_db",
+        "PAYMENT_DB_PASSWORD_FILE": "/run/secrets/payment_db",
+        "ORDER_ADAPTER": "demo",
+        "TABLE_ADAPTER": "demo",
+        "ORDER_BASE_URL": "http://order-service:3000",
+        "TABLE_BASE_URL": "http://reservation-service:3000",
+        "TABLE_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "ORDER_SERVICE_TOKEN_FILE": "/run/secrets/service_token",
+        "VNPAY_CONFIG_FILE": "/run/secrets/vnpay_config",
+        "SEED_VOUCHERS": "true",
+        "JWT_PRIVATE_KEY_FILE": "/run/secrets/jwt_private"
+      },
+      "secrets": [
+        "payment_db",
+        "jwt_public",
+        "jwt_private",
+        "service_token"
+      ],
+      "networks": [
+        "data",
+        "backend"
+      ],
+      "restart": "no"
+    },
+    "menu-tests": {
+      "build": ".",
+      "profiles": [
+        "test"
+      ],
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "tests/integration.test.mjs"
+      ],
+      "environment": {
+        "API_BASE_URL": "http://api-gateway:3000",
+        "MENU_BASE_URL": "http://menu-service:3000",
+        "DEMO_PASSWORD_FILE": "/run/secrets/login_password",
+        "INTERNAL_SERVICE_TOKEN_FILE": "/run/secrets/service_token"
+      },
+      "secrets": [
+        "login_password",
+        "service_token"
+      ],
+      "networks": [
+        "backend"
+      ],
+      "restart": "no"
+    },
+    "browser-tests": {
+      "build": {
+        "context": ".",
+        "dockerfile": "Dockerfile.tests"
+      },
+      "profiles": [
+        "test"
+      ],
+      "environment": {
+        "WEB_BASE_URL": "http://web:8080",
+        "DEMO_PASSWORD_FILE": "/run/secrets/login_password"
+      },
+      "secrets": [
+        "login_password"
+      ],
+      "networks": [
+        "frontend",
+        "backend"
+      ],
+      "shm_size": "1gb",
+      "restart": "no"
+    },
+    "unit-tests": {
+      "build": ".",
+      "profiles": [
+        "test"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:unit"
+      ],
+      "tmpfs": [
+        "/app/test-results:mode=1777"
+      ],
+      "restart": "no"
+    }
+  },
+  "networks": {
+    "data": {
+      "internal": true
+    },
+    "backend": {},
+    "frontend": {}
+  },
+  "volumes": {
+    "integrated_data": {}
+  },
+  "secrets": {
+    "root_password": {
+      "file": "./.local/root-password"
+    },
+    "identity_db": {
+      "file": "./.local/identity-db"
+    },
+    "menu_db": {
+      "file": "./.local/menu-db"
+    },
+    "payment_db": {
+      "file": "./.local/payment-db"
+    },
+    "reservation_db": {
+      "file": "./.local/reservation-db"
+    },
+    "inventory_db": {
+      "file": "./.local/inventory-db"
+    },
+    "staff_db": {
+      "file": "./.local/staff-db"
+    },
+    "schedule_db": {
+      "file": "./.local/schedule-db"
+    },
+    "jwt_public": {
+      "file": "./.local/jwt-public.pem"
+    },
+    "jwt_private": {
+      "file": "./.local/jwt-private.pem"
+    },
+    "service_token": {
+      "file": "./.local/service-token"
+    },
+    "login_password": {
+      "file": "./.local/login-password"
+    },
+    "vnpay_config": {
+      "file": "./.local/vnpay.json"
+    },
+    "order_db": {
+      "file": "./.local/order-db"
+    }
+  }
+}
