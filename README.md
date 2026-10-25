@@ -75,6 +75,7 @@ npm ci
 npm run test:integration
 npm run test:modules
 npm run test:outage
+npm run test:seed
 ~~~
 
 Các test này ghi fixture riêng, có thể restart/recreate payment-service thuộc đúng project của bản clone. Không chạy khi nhóm đang dùng chung stack. Kết quả/screenshot/trace không đưa vào Git; trace đăng nhập đã tắt. Không chạy test tích hợp song song trên cùng stack.

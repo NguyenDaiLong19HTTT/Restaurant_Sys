@@ -19,7 +19,8 @@
     "test:modules": "node --test --test-concurrency=1 tests/hr-inventory.test.mjs",
     "test:outage": "node --test tests/outage.test.mjs",
     "test:unit": "node --test tests/unit.test.mjs tests/payment.unit.test.mjs services/reservation/test/unit/*.test.js services/inventory/test/unit/*.test.js tests/schedule-week.test.mjs",
-    "openapi:integration": "node scripts/integration-openapi.mjs"
+    "openapi:integration": "node scripts/integration-openapi.mjs",
+    "test:seed": "node --test tests/seed-repeat.test.mjs"
   },
   "dependencies": {
     "express": "5.1.0",
